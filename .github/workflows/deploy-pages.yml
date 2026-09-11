@@ -26,6 +26,22 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      - name: Verify credentials
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "token length: ${#CLOUDFLARE_API_TOKEN}"
+          echo "account length: ${#CLOUDFLARE_ACCOUNT_ID}"
+          echo "--- verify ---"
+          curl -s --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/user/tokens/verify" || true
+          echo
+          echo "--- account ---"
+          curl -s --max-time 20 -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID" || true
+          echo
+
       - name: Stage worker bundle
         run: |
           mkdir -p dist
