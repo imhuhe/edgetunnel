@@ -1,0 +1,43 @@
+name: Deploy Pages
+
+on:
+  workflow_run:
+    workflows: ["Upstream Sync"]
+    types: [completed]
+  schedule:
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Stage worker bundle
+        run: |
+          mkdir -p dist
+          cp _worker.js dist/_worker.js
+          grep -m1 "const Version" _worker.js || true
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 pages deploy dist \
+            --project-name=admin \
+            --branch=main \
+            --commit-dirty=true

@@ -1,0 +1,67 @@
+name: Smoke Test
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      KV_NS: f44307532c2a4644832681e885c849cc
+      BASE_URL: https://imhuhe.ccwu.cc
+    steps:
+      - name: Probe edgetunnel
+        run: |
+          set -euo pipefail
+          kv() {
+            curl -fsS --max-time 20 \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces/$KV_NS/values/$1"
+          }
+          cfg="$(kv config.json)"
+          UUID="$(printf '%s' "$cfg" | python3 -c "import json,sys;print(json.load(sys.stdin)['UUID'])")"
+          TOKEN="$(printf '%s' "$cfg" | python3 -c "import json,sys;print(json.load(sys.stdin)['优选订阅生成']['TOKEN'])")"
+
+          echo "probe 1: root"
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$BASE_URL/")"
+          [ "$code" = "200" ] || { echo "root returned $code"; exit 1; }
+
+          echo "probe 2: version"
+          ver="$(curl -fsS --max-time 20 "$BASE_URL/version?uuid=$UUID")"
+          printf '%s' "$ver" | grep -q '"Version"' || { echo "version probe failed: $ver"; exit 1; }
+          echo "live $ver"
+
+          echo "probe 3: subscription"
+          sub="$(curl -fsS --max-time 30 "$BASE_URL/sub?token=$TOKEN")"
+          decoded="$(printf '%s' "$sub" | base64 -d 2>/dev/null || printf '%s' "$sub")"
+          printf '%s' "$decoded" | grep -q 'vless://' || { echo "subscription has no vless node"; exit 1; }
+
+          echo "all probes passed"
+
+      - name: Telegram alert on failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          tg="$(curl -fsS --max-time 20 \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces/$KV_NS/values/tg.json")"
+          BOT="$(printf '%s' "$tg" | python3 -c "import json,sys;print(json.load(sys.stdin)['BotToken'])")"
+          CHAT="$(printf '%s' "$tg" | python3 -c "import json,sys;print(json.load(sys.stdin)['ChatID'])")"
+          text="⚠️ edgetunnel 冒烟失败
+          时间: $(date -u +%FT%TZ)
+          运行: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -fsS --max-time 20 -X POST "https://api.telegram.org/bot$BOT/sendMessage" \
+            --data-urlencode "chat_id=$CHAT" \
+            --data-urlencode "text=$text" >/dev/null
+          echo "alert sent"
