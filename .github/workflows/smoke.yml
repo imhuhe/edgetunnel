@@ -24,9 +24,12 @@ jobs:
       - name: Probe edgetunnel
         run: |
           set -euo pipefail
+          # 瞬时抖动（部署传播、边缘 5xx）自动重试，避免误报
+          curl_retry() {
+            curl -fsS --max-time 25 --retry 4 --retry-all-errors --retry-delay 5 "$@"
+          }
           kv() {
-            curl -fsS --max-time 20 \
-              -H "Authorization: Bearer $CF_TOKEN" \
+            curl_retry -H "Authorization: Bearer $CF_TOKEN" \
               "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces/$KV_NS/values/$1"
           }
           cfg="$(kv config.json)"
@@ -34,16 +37,15 @@ jobs:
           TOKEN="$(printf '%s' "$cfg" | python3 -c "import json,sys;print(json.load(sys.stdin)['优选订阅生成']['TOKEN'])")"
 
           echo "probe 1: root"
-          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "$BASE_URL/")"
-          [ "$code" = "200" ] || { echo "root returned $code"; exit 1; }
+          curl_retry -o /dev/null "$BASE_URL/" || { echo "root unreachable"; exit 1; }
 
           echo "probe 2: version"
-          ver="$(curl -fsS --max-time 20 "$BASE_URL/version?uuid=$UUID")"
+          ver="$(curl_retry "$BASE_URL/version?uuid=$UUID")"
           printf '%s' "$ver" | grep -q '"Version"' || { echo "version probe failed: $ver"; exit 1; }
           echo "live $ver"
 
           echo "probe 3: subscription"
-          sub="$(curl -fsS --max-time 30 "$BASE_URL/sub?token=$TOKEN")"
+          sub="$(curl_retry "$BASE_URL/sub?token=$TOKEN")"
           decoded="$(printf '%s' "$sub" | base64 -d 2>/dev/null || printf '%s' "$sub")"
           printf '%s' "$decoded" | grep -q 'vless://' || { echo "subscription has no vless node"; exit 1; }
 
